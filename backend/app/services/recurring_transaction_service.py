@@ -16,6 +16,30 @@ from app.services.credit_card_service import apply_effective_date
 from app.services.fx_rate_service import stamp_primary_amount
 
 
+_BUILT_IN_FREQUENCIES = frozenset({"weekly", "monthly", "quarterly", "yearly"})
+_CUSTOM_INTERVAL_UNITS = frozenset({"days", "weeks", "months", "years"})
+
+
+def _validate_schedule(
+    frequency: str, interval_count: int | None, interval_unit: str | None
+) -> tuple[int | None, str | None]:
+    if frequency in _BUILT_IN_FREQUENCIES:
+        return None, None
+    if frequency != "custom":
+        raise ValueError("Unsupported recurrence frequency")
+    if interval_count is None or interval_count < 1 or interval_count > 3650:
+        raise ValueError("Custom recurrence interval must be between 1 and 3650")
+    if interval_unit not in _CUSTOM_INTERVAL_UNITS:
+        raise ValueError("Custom recurrence unit must be days, weeks, months, or years")
+    return interval_count, interval_unit
+
+
+def _validate_notification_offsets(offsets: list[int]) -> list[int]:
+    if any(not isinstance(offset, int) or offset < -365 or offset > 0 for offset in offsets):
+        raise ValueError("Email alert offsets must be whole days from -365 through 0")
+    return sorted(set(offsets))
+
+
 async def _verify_account_in_workspace(
     session: AsyncSession, workspace_id: uuid.UUID, account_id: uuid.UUID
 ) -> None:
@@ -63,11 +87,17 @@ async def create_recurring_transaction(
     data: RecurringTransactionCreate,
 ) -> RecurringTransaction:
     await _verify_account_in_workspace(session, workspace_id, data.account_id)
+    interval_count, interval_unit = _validate_schedule(
+        data.frequency, data.interval_count, data.interval_unit
+    )
+    notification_offsets = _validate_notification_offsets(data.notification_offsets)
     next_occ = data.start_date
     if data.skip_first:
         next_occ = _advance_date(
             data.start_date, data.frequency,
             intended_day=data.day_of_month or data.start_date.day,
+            interval_count=interval_count,
+            interval_unit=interval_unit,
         )
     recurring = RecurringTransaction(
         user_id=user_id,
@@ -75,15 +105,20 @@ async def create_recurring_transaction(
         account_id=data.account_id,
         category_id=data.category_id,
         description=data.description,
+        notes=data.notes,
         amount=data.amount,
         currency=data.currency,
         type=data.type,
         frequency=data.frequency,
+        interval_count=interval_count,
+        interval_unit=interval_unit,
         weekend_adjustment=data.weekend_adjustment,
         day_of_month=data.day_of_month,
         start_date=data.start_date,
         end_date=data.end_date,
         auto_generate=data.auto_generate,
+        notification_offsets=notification_offsets,
+        notify_overdue_daily=data.notify_overdue_daily,
         next_occurrence=next_occ,
     )
     session.add(recurring)
@@ -121,6 +156,28 @@ async def update_recurring_transaction(
         if new_account_id != recurring.account_id:
             await _verify_account_in_workspace(session, workspace_id, new_account_id)
 
+    next_frequency = update_data.get("frequency", recurring.frequency)
+    next_interval_count = update_data.get("interval_count", recurring.interval_count)
+    next_interval_unit = update_data.get("interval_unit", recurring.interval_unit)
+    interval_count, interval_unit = _validate_schedule(
+        next_frequency, next_interval_count, next_interval_unit
+    )
+    if next_frequency in _BUILT_IN_FREQUENCIES:
+        # A switch away from custom must clear stale interval metadata.
+        update_data["interval_count"] = None
+        update_data["interval_unit"] = None
+    elif "interval_count" not in update_data:
+        update_data["interval_count"] = interval_count
+    elif "interval_unit" not in update_data:
+        update_data["interval_unit"] = interval_unit
+
+    if "notification_offsets" in update_data:
+        if update_data["notification_offsets"] is None:
+            raise ValueError("notification_offsets cannot be null")
+        update_data["notification_offsets"] = _validate_notification_offsets(
+            update_data["notification_offsets"]
+        )
+
     for key, value in update_data.items():
         setattr(recurring, key, value)
 
@@ -151,7 +208,11 @@ def _advance_months(current: date, months: int, intended_day: int) -> date:
 
 
 def _advance_date(
-    current: date, frequency: str, intended_day: Optional[int] = None,
+    current: date,
+    frequency: str,
+    intended_day: Optional[int] = None,
+    interval_count: Optional[int] = None,
+    interval_unit: Optional[str] = None,
 ) -> date:
     """Advance a date by the given frequency.
 
@@ -170,6 +231,19 @@ def _advance_date(
         return _advance_months(current, 3, target_day)
     if frequency == "yearly":
         year = current.year + 1
+        day = min(target_day, calendar.monthrange(year, current.month)[1])
+        return date(year, current.month, day)
+
+    if frequency == "custom":
+        count, unit = _validate_schedule(frequency, interval_count, interval_unit)
+        assert count is not None and unit is not None
+        if unit == "days":
+            return current + timedelta(days=count)
+        if unit == "weeks":
+            return current + timedelta(weeks=count)
+        if unit == "months":
+            return _advance_months(current, count, target_day)
+        year = current.year + count
         day = min(target_day, calendar.monthrange(year, current.month)[1])
         return date(year, current.month, day)
 
@@ -197,6 +271,8 @@ def get_occurrences_in_range(
     range_start: date, range_end: date,
     intended_day: Optional[int] = None,
     weekend_adjustment: str = "none",
+    interval_count: Optional[int] = None,
+    interval_unit: Optional[str] = None,
 ) -> list[date]:
     """Compute effective occurrence dates within ``[range_start, range_end)``.
 
@@ -212,14 +288,20 @@ def get_occurrences_in_range(
     while current < nominal_range_start:
         if end_date and current > end_date:
             return occurrences
-        current = _advance_date(current, frequency, intended_day=day)
+        current = _advance_date(
+            current, frequency, intended_day=day,
+            interval_count=interval_count, interval_unit=interval_unit,
+        )
     while current < nominal_range_end:
         if end_date and current > end_date:
             break
         effective_date = adjust_weekend_date(current, weekend_adjustment)
         if range_start <= effective_date < range_end:
             occurrences.append(effective_date)
-        current = _advance_date(current, frequency, intended_day=day)
+        current = _advance_date(
+            current, frequency, intended_day=day,
+            interval_count=interval_count, interval_unit=interval_unit,
+        )
         if len(occurrences) > 200:
             break
     return occurrences
@@ -309,6 +391,7 @@ async def generate_pending(
                     account_id=recurring.account_id,
                     category_id=recurring.category_id,
                     description=recurring.description,
+                    notes=recurring.notes,
                     amount=recurring.amount,
                     currency=recurring.currency,
                     date=effective_occurrence,
@@ -327,6 +410,8 @@ async def generate_pending(
             recurring.next_occurrence = _advance_date(
                 recurring.next_occurrence, recurring.frequency,
                 intended_day=recurring.day_of_month or recurring.start_date.day,
+                interval_count=recurring.interval_count,
+                interval_unit=recurring.interval_unit,
             )
 
             # Check again if past end_date after advancing

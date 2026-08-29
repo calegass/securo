@@ -89,6 +89,11 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("PATCH", "/api/agents/connections/{conn_id}"): "the requester's own LLM credentials",
     ("DELETE", "/api/agents/connections/{conn_id}"): "the requester's own LLM credentials",
     ("POST", "/api/agents/connections/{conn_id}/test"): "probes the requester's own credential",
+    # Bank-provider credentials have the same ownership model: the service
+    # always filters by the authenticated user's id and never returns secrets.
+    ("PUT", "/api/bank-provider-configurations/{provider}"): "the requester's own bank-provider credentials",
+    ("PATCH", "/api/bank-provider-configurations/{provider}"): "the requester's own bank-provider credentials",
+    ("DELETE", "/api/bank-provider-configurations/{provider}"): "the requester's own bank-provider credentials",
     # Global, not workspace data: FX rates are shared by the whole instance.
     # Any authenticated user may refresh them, and nothing per-workspace is
     # touched. Flagged here so a future rate limit or admin floor is a

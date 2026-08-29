@@ -417,10 +417,9 @@ def _count_occurrences_before(recurring: RecurringTransaction, end: date) -> int
 
     count = 0
     while range_start < range_end:
-        # Weekly is the shortest supported cadence. Two hundred-week chunks
-        # stay within the occurrence helper's collection limit while allowing
-        # an arbitrarily long carry horizon.
-        chunk_end = min(range_start + timedelta(weeks=200), range_end)
+        # Daily custom cadences are the shortest supported schedule. A
+        # 200-day chunk stays within the occurrence helper's collection limit.
+        chunk_end = min(range_start + timedelta(days=200), range_end)
         occurrences = get_occurrences_in_range(
             start=nominal_start,
             frequency=recurring.frequency,
@@ -429,6 +428,8 @@ def _count_occurrences_before(recurring: RecurringTransaction, end: date) -> int
             range_end=chunk_end,
             intended_day=recurring.day_of_month or recurring.start_date.day,
             weekend_adjustment=recurring.weekend_adjustment,
+            interval_count=recurring.interval_count,
+            interval_unit=recurring.interval_unit,
         )
         count += len(occurrences)
         range_start = chunk_end
@@ -477,6 +478,8 @@ async def _project_recurring_items(
             range_end=end,
             intended_day=rec.day_of_month or rec.start_date.day,
             weekend_adjustment=rec.weekend_adjustment,
+            interval_count=rec.interval_count,
+            interval_unit=rec.interval_unit,
         )
         category = rec.category
         account = rec.account

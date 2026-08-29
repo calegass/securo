@@ -147,7 +147,7 @@ function RecurringTab() {
   })
 
   const frequencyLabel = (f: string) => {
-    const map: Record<string, string> = { monthly: t('recurring.monthly'), quarterly: t('recurring.quarterly'), weekly: t('recurring.weekly'), yearly: t('recurring.yearly') }
+    const map: Record<string, string> = { monthly: t('recurring.monthly'), quarterly: t('recurring.quarterly'), weekly: t('recurring.weekly'), yearly: t('recurring.yearly'), custom: t('recurring.custom', 'Personalizada') }
     return map[f] ?? f
   }
 
@@ -254,8 +254,8 @@ function RecurringTab() {
       </SectionCard>
 
       <Dialog open={dialogOpen} onOpenChange={() => { setDialogOpen(false); setEditing(null) }}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden flex flex-col sm:max-w-xl">
+          <DialogHeader className="shrink-0">
             <DialogTitle>{editing ? t('recurring.edit') : t('recurring.add')}</DialogTitle>
           </DialogHeader>
           <RecurringForm
@@ -321,10 +321,15 @@ function RecurringForm({
     staleTime: Infinity,
   })
   const [description, setDescription] = useState(recurring?.description ?? '')
+  const [notes, setNotes] = useState(recurring?.notes ?? '')
   const [amount, setAmount] = useState(recurring?.amount?.toString() ?? '')
   const [currency, setCurrency] = useState(recurring?.currency ?? userCurrency)
   const [type, setType] = useState<'debit' | 'credit'>(recurring?.type ?? 'debit')
   const [frequency, setFrequency] = useState(recurring?.frequency ?? 'monthly')
+  const [intervalCount, setIntervalCount] = useState(recurring?.interval_count?.toString() ?? '1')
+  const [intervalUnit, setIntervalUnit] = useState<NonNullable<RecurringTransaction['interval_unit']>>(
+    recurring?.interval_unit ?? 'months'
+  )
   const [weekendAdjustment, setWeekendAdjustment] = useState<RecurringTransaction['weekend_adjustment']>(
     recurring?.weekend_adjustment ?? 'none'
   )
@@ -335,6 +340,13 @@ function RecurringForm({
   const [accountId, setAccountId] = useState(recurring?.account_id ?? sortedAccounts[0]?.id ?? '')
   const [isActive, setIsActive] = useState(recurring?.is_active ?? true)
   const [autoGenerate, setAutoGenerate] = useState(recurring?.auto_generate ?? true)
+  const initialAlertOffsets = recurring?.notification_offsets ?? []
+  const [notifyBefore, setNotifyBefore] = useState(initialAlertOffsets.some((offset) => offset < 0))
+  const [daysBefore, setDaysBefore] = useState(
+    String(Math.abs(initialAlertOffsets.find((offset) => offset < 0) ?? -3))
+  )
+  const [notifyOnDueDate, setNotifyOnDueDate] = useState(initialAlertOffsets.includes(0))
+  const [notifyOverdueDaily, setNotifyOverdueDaily] = useState(recurring?.notify_overdue_daily ?? false)
 
   const selectClass = 'w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary'
 
@@ -342,12 +354,16 @@ function RecurringForm({
     <form
       onSubmit={(e) => {
         e.preventDefault()
+        const beforeOffset = Math.max(1, parseInt(daysBefore) || 3)
         onSave({
           description,
+          notes: notes || null,
           amount: parseFloat(amount),
           currency,
           type,
           frequency,
+          interval_count: frequency === 'custom' ? parseInt(intervalCount) : null,
+          interval_unit: frequency === 'custom' ? intervalUnit : null,
           weekend_adjustment: weekendAdjustment,
           day_of_month: dayOfMonth ? parseInt(dayOfMonth) : null,
           start_date: startDate,
@@ -356,13 +372,28 @@ function RecurringForm({
           account_id: accountId || null,
           is_active: isActive,
           auto_generate: autoGenerate,
+          notification_offsets: [
+            ...(notifyBefore ? [-beforeOffset] : []),
+            ...(notifyOnDueDate ? [0] : []),
+          ],
+          notify_overdue_daily: notifyOverdueDaily,
         } as Partial<RecurringTransaction>)
       }}
-      className="space-y-4"
+      className="flex flex-1 min-h-0 flex-col"
     >
+      <div className="space-y-4 overflow-y-auto min-h-0 pr-1 sm:pr-2">
       <div className="space-y-2">
         <Label>{t('recurring.description')}</Label>
         <Input value={description} onChange={(e) => setDescription(e.target.value)} required />
+      </div>
+      <div className="space-y-2">
+        <Label>{t('recurring.notes', 'Observações')}</Label>
+        <textarea
+          className={`${selectClass} min-h-20 resize-y`}
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          maxLength={1000}
+        />
       </div>
       <div className="grid grid-cols-3 gap-4">
         <div className="space-y-2">
@@ -393,15 +424,33 @@ function RecurringForm({
             <option value="quarterly">{t('recurring.quarterly')}</option>
             <option value="weekly">{t('recurring.weekly')}</option>
             <option value="yearly">{t('recurring.yearly')}</option>
+            <option value="custom">{t('recurring.custom', 'Personalizada')}</option>
           </select>
         </div>
-        {(frequency === 'monthly' || frequency === 'quarterly') && (
+        {(frequency === 'monthly' || frequency === 'quarterly' || (frequency === 'custom' && (intervalUnit === 'months' || intervalUnit === 'years'))) && (
           <div className="space-y-2">
             <Label>{t('recurring.dayOfMonth')}</Label>
             <Input type="number" min="1" max="31" value={dayOfMonth} onChange={(e) => setDayOfMonth(e.target.value)} />
           </div>
         )}
       </div>
+      {frequency === 'custom' && (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>{t('recurring.interval', 'Repetir a cada')}</Label>
+            <Input type="number" min="1" max="3650" value={intervalCount} onChange={(e) => setIntervalCount(e.target.value)} required />
+          </div>
+          <div className="space-y-2">
+            <Label>{t('recurring.intervalUnit', 'Unidade')}</Label>
+            <select className={selectClass} value={intervalUnit} onChange={(e) => setIntervalUnit(e.target.value as NonNullable<RecurringTransaction['interval_unit']>)}>
+              <option value="days">{t('recurring.days', 'dias')}</option>
+              <option value="weeks">{t('recurring.weeks', 'semanas')}</option>
+              <option value="months">{t('recurring.months', 'meses')}</option>
+              <option value="years">{t('recurring.years', 'anos')}</option>
+            </select>
+          </div>
+        </div>
+      )}
       <div className="space-y-2">
         <Label>{t('recurring.weekendAdjustment')}</Label>
         <select
@@ -464,6 +513,28 @@ function RecurringForm({
           <span className="block text-xs text-muted-foreground">{t('recurring.autoGenerateHelp')}</span>
         </span>
       </label>
+      <div className="rounded-lg border border-border p-3 space-y-3">
+        <div>
+          <p className="text-sm font-medium text-foreground">{t('recurring.emailAlerts', 'Alertas por e-mail')}</p>
+          <p className="text-xs text-muted-foreground">{t('recurring.emailAlertsHelp', 'Requer SMTP configurado no servidor.')}</p>
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" checked={notifyBefore} onChange={(e) => setNotifyBefore(e.target.checked)} className="h-4 w-4 rounded border-border" />
+          {t('recurring.beforeDue', 'Avisar antes do vencimento')}
+          {notifyBefore && (
+            <Input className="h-8 w-16" type="number" min="1" max="365" value={daysBefore} onChange={(e) => setDaysBefore(e.target.value)} />
+          )}
+          {notifyBefore && <span className="text-muted-foreground">{t('recurring.days', 'dias')}</span>}
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" checked={notifyOnDueDate} onChange={(e) => setNotifyOnDueDate(e.target.checked)} className="h-4 w-4 rounded border-border" />
+          {t('recurring.onDueDate', 'Avisar no dia do vencimento')}
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" checked={notifyOverdueDaily} onChange={(e) => setNotifyOverdueDaily(e.target.checked)} className="h-4 w-4 rounded border-border" />
+          {t('recurring.overdueDaily', 'Avisar diariamente após vencer, até o pagamento')}
+        </label>
+      </div>
       {recurring && (
         <label className="flex items-center gap-2 cursor-pointer">
           <input
@@ -475,7 +546,8 @@ function RecurringForm({
           <span className="text-sm text-foreground">{t('recurring.active')}</span>
         </label>
       )}
-      <DialogFooter>
+      </div>
+      <DialogFooter className="shrink-0 border-t pt-4 mt-4">
         <Button type="button" variant="outline" onClick={onCancel}>{t('common.cancel')}</Button>
         <Button type="submit" disabled={loading}>
           {loading ? t('common.loading') : t('common.save')}

@@ -43,7 +43,7 @@ import { calculateRangeSelection } from '@/lib/selection-utils'
 import { isManualInstallmentSeriesRow } from '@/lib/installment-series'
 import { CategoryIcon } from '@/components/category-icon'
 import { CategorySelect } from '@/components/category-select'
-import { TransactionDialog, type SaveAction, type TransactionSavePayload } from '@/components/transaction-dialog'
+import { TransactionDialog, type RecurringCreationOptions, type SaveAction, type TransactionSavePayload } from '@/components/transaction-dialog'
 import { extractApiError } from '@/lib/api-errors'
 import { TransactionsColumnPicker } from '@/components/transactions-column-picker'
 import { TransactionsPageActions } from '@/components/transactions-page-actions'
@@ -499,7 +499,7 @@ export default function TransactionsPage() {
   const invalidateAfterTxMutation = () => invalidateFinancialQueries(queryClient)
 
   const createMutation = useMutation({
-    mutationFn: async (payload: { tx: TransactionEditPayload; recurringData?: { frequency: string; end_date?: string }; installmentData?: InstallmentSeriesInput; pendingFiles?: File[]; action?: SaveAction }) => {
+    mutationFn: async (payload: { tx: TransactionEditPayload; recurringData?: RecurringCreationOptions; installmentData?: InstallmentSeriesInput; pendingFiles?: File[]; action?: SaveAction }) => {
       let created: Transaction
       if (payload.installmentData) {
         // Manual installment series: the backend repeats the base row N
@@ -520,8 +520,13 @@ export default function TransactionsPage() {
           end_date: payload.recurringData.end_date || undefined,
           category_id: payload.tx.category_id || undefined,
           account_id: payload.tx.account_id || undefined,
+          notes: payload.tx.notes || undefined,
+          interval_count: payload.recurringData.interval_count,
+          interval_unit: payload.recurringData.interval_unit,
+          notification_offsets: payload.recurringData.notification_offsets,
+          notify_overdue_daily: payload.recurringData.notify_overdue_daily,
           skip_first: true,
-        } as Record<string, unknown>)
+        })
       }
       if (payload.pendingFiles?.length) {
         await Promise.all(
@@ -876,7 +881,7 @@ export default function TransactionsPage() {
 
   const handleTransactionSave = (
     data: TransactionSavePayload,
-    recurringData?: { frequency: string; end_date?: string },
+    recurringData?: RecurringCreationOptions,
     installmentData?: InstallmentSeriesInput,
     pendingFiles?: File[],
     action?: SaveAction,

@@ -24,7 +24,7 @@ import { DatePickerInput } from '@/components/ui/date-picker-input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { Account, BankConnection } from '@/types'
-import { RefreshCw, TriangleAlert, Unlink, Settings } from 'lucide-react'
+import { RefreshCw, TriangleAlert, Unlink, Settings, KeyRound } from 'lucide-react'
 import { AccountIcon, ConnectionLogo, getAccountTypeConfig } from '@/components/account-icon'
 import { AccountPageActions } from '@/components/account-page-actions'
 import { AccountRowActions } from '@/components/account-row-actions'
@@ -34,6 +34,7 @@ import { ConnectorSelectDialog, type Provider } from '@/components/connector-sel
 import { OAuthConnectDialog } from '@/components/oauth-connect-dialog'
 import { TokenConnectDialog } from '@/components/token-connect-dialog'
 import { ConnectionSettingsDialog } from '@/components/connection-settings-dialog'
+import { PluggyConfigurationDialog } from '@/components/pluggy-configuration-dialog'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { useWorkspace } from '@/contexts/workspace-context'
@@ -79,6 +80,7 @@ export default function AccountsPage() {
   const [reconnectConnId, setReconnectConnId] = useState<string | null>(null)
   const [reconnectItemId, setReconnectItemId] = useState<string | null>(null)
   const [tokenReconnectConnection, setTokenReconnectConnection] = useState<BankConnection | null>(null)
+  const [pluggyConfigOpen, setPluggyConfigOpen] = useState(false)
 
   const { data: accountsList, isLoading: accountsLoading } = useQuery({
     queryKey: ['accounts'],
@@ -226,12 +228,20 @@ export default function AccountsPage() {
         section={t('accounts.title')}
         title={t('accounts.title')}
         action={
-          <AccountPageActions
-            canWrite={canWrite}
-            onAddAccount={() => { setEditingAccount(null); setDialogOpen(true) }}
-            onConnectBank={() => setConnectorSelectOpen(true)}
-            onOpenCollections={() => navigate('/collections')}
-          />
+          <div className="flex items-center gap-2">
+            {canWrite && (
+              <Button variant="outline" size="sm" onClick={() => setPluggyConfigOpen(true)}>
+                <KeyRound className="mr-2 h-4 w-4" />
+                {t('accounts.configurePluggy', 'Credenciais Pluggy')}
+              </Button>
+            )}
+            <AccountPageActions
+              canWrite={canWrite}
+              onAddAccount={() => { setEditingAccount(null); setDialogOpen(true) }}
+              onConnectBank={() => setConnectorSelectOpen(true)}
+              onOpenCollections={() => navigate('/collections')}
+            />
+          </div>
         }
       />
 
@@ -580,6 +590,12 @@ export default function AccountsPage() {
         open={connectorSelectOpen}
         onClose={() => setConnectorSelectOpen(false)}
         onSelect={(provider) => setSelectedProvider(provider)}
+        onConfigurePluggy={() => setPluggyConfigOpen(true)}
+      />
+
+      <PluggyConfigurationDialog
+        open={pluggyConfigOpen}
+        onClose={() => setPluggyConfigOpen(false)}
       />
 
       {/* Bank Connect Dialog — widget-based (Pluggy) */}

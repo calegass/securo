@@ -2,7 +2,7 @@ from pathlib import Path
 from pydantic import SecretStr, ValidationError
 import pytest
 
-from app.core.config import Settings
+from app.core.config import DEFAULT_SECRET_KEY, Settings
 
 
 def write(dir: Path, name: str, value: str) -> None:
@@ -23,6 +23,16 @@ def test_env_file_is_anchored_to_backend_dir():
     backend_env = Path(__file__).resolve().parents[1] / ".env"
     assert isinstance(env_files, tuple)
     assert backend_env in tuple(Path(p) for p in env_files)
+
+
+def test_production_rejects_default_secret_key(secrets: Path):
+    with pytest.raises(ValidationError, match="SECRET_KEY must be a random value"):
+        Settings(debug=False, secret_key=DEFAULT_SECRET_KEY, _secrets_dir=str(secrets))
+
+
+def test_production_accepts_strong_secret_key(secrets: Path):
+    settings = Settings(debug=False, secret_key="a" * 48, _secrets_dir=str(secrets))
+    assert settings.secret_key.get_secret_value() == "a" * 48
 
 
 def test_env_file_with_unknown_keys_still_loads(tmp_path: Path, secrets: Path):

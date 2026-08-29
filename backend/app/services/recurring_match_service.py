@@ -194,7 +194,11 @@ def advance_past(recurring: RecurringTransaction, fulfilled_date: date) -> None:
     guard = 0
     while recurring.next_occurrence <= target and guard < 500:
         recurring.next_occurrence = _advance_date(
-            recurring.next_occurrence, recurring.frequency, intended_day=intended_day
+            recurring.next_occurrence,
+            recurring.frequency,
+            intended_day=intended_day,
+            interval_count=recurring.interval_count,
+            interval_unit=recurring.interval_unit,
         )
         guard += 1
     if recurring.end_date and recurring.next_occurrence > recurring.end_date:

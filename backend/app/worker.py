@@ -27,6 +27,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.recurring_tasks.generate_all_recurring",
         "schedule": 60 * 60,  # every hour; generate_pending is idempotent (advances next_occurrence)
     },
+    "send-financial-due-alerts-hourly": {
+        "task": "app.tasks.notification_tasks.send_due_alerts",
+        "schedule": 60 * 60,
+    },
     "apply-asset-growth-daily": {
         "task": "app.tasks.asset_tasks.apply_asset_growth_rules",
         "schedule": 60 * 60,  # every hour; idempotent (checks last value date)
@@ -60,6 +64,7 @@ celery_app.conf.include = [
     "app.tasks.recurring_tasks",
     "app.tasks.asset_tasks",
     "app.tasks.fx_rate_tasks",
+    "app.tasks.notification_tasks",
     # Optional agents module — registering the import is harmless when
     # AGENTS_ENABLED=false (the task just won't be dispatched).
     "app.agents.tasks.ingest",

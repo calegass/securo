@@ -60,6 +60,12 @@ Open [http://localhost:3000](http://localhost:3000) and create an account. That'
 
 ## Bank Sync (Optional)
 
+Before using user-owned integration credentials in production, set
+`DEBUG=false` and a random `SECRET_KEY` with at least 32 characters. For
+example: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+Securo refuses to start in production with the documented placeholder or a
+short secret key.
+
 Add credentials for any of the supported providers to `.env`, then restart with `docker compose up`. Configure one or both — each provider auto-registers when its credentials are present.
 
 ### Pluggy — Brazilian banks
@@ -70,6 +76,25 @@ Sign up at [pluggy.ai](https://pluggy.ai) and add:
 PLUGGY_CLIENT_ID=your-client-id
 PLUGGY_CLIENT_SECRET=your-client-secret
 ```
+
+These environment variables remain the deployment-wide fallback for existing
+installations. A user can instead save their own Pluggy credentials in the
+Accounts screen; those credentials are encrypted in the database, never
+returned by the API, and are used only for that user's connections.
+
+### SMTP notifications (optional)
+
+Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`,
+and `SMTP_TLS=true` (STARTTLS, normally port 587). With SMTP configured,
+Securo sends one email when a scheduled bank synchronization first fails or a
+bank connection needs reauthorization; it does not repeatedly email on every
+retry while the connection remains in error.
+
+Recurring obligations can opt into an email a chosen number of days before
+their due date, on the date itself, and once per day after it is overdue until
+the linked payment posts. Credit-card bills received from bank sync are
+alerted three days before and on their due date. Delivery records make the
+hourly worker idempotent.
 
 ### Enable Banking — European banks (PSD2)
 

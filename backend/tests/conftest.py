@@ -12,6 +12,9 @@ from unittest.mock import AsyncMock, patch
 os.environ.setdefault("AGENTS_ENABLED", "true")
 os.environ.setdefault("AGENTS_MCP_JWT_SECRET", "test-secret-not-for-production")
 os.environ.setdefault("AGENTS_BUILTIN_MCP_URL", "http://test-mcp:8765/mcp")
+# Test defaults intentionally use short deterministic secrets; production
+# validation is covered explicitly in test_config instead.
+os.environ.setdefault("DEBUG", "true")
 
 # pgvector's Vector type only compiles on PostgreSQL. Tests use SQLite, so
 # we shim it with JSON before any model module imports it. Production runs
@@ -49,6 +52,7 @@ from app.models.user import User  # noqa: E402
 from app.models.passkey import UserPasskey  # noqa: E402,F401
 from app.models.category import Category  # noqa: E402
 from app.models.bank_connection import BankConnection  # noqa: E402
+from app.models.notification_delivery import NotificationDelivery  # noqa: E402,F401
 from app.models.account import Account  # noqa: E402
 from app.models.transaction import Transaction  # noqa: E402
 from app.models.rule import Rule  # noqa: E402

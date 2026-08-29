@@ -11,6 +11,7 @@ import type {
   CategoryRuleUsage,
   CategoryGroup,
   BankConnection,
+  BankProviderConfiguration,
   ConnectionSettings,
   Account,
   AccountSummary,
@@ -406,6 +407,19 @@ export const connections = {
   },
   delete: async (id: string): Promise<void> => {
     await api.delete(`/connections/${id}`)
+  },
+}
+
+// Private bank-provider application credentials. Read responses intentionally
+// contain only configuration status, never a client ID or secret.
+export const bankProviderConfigurations = {
+  list: async (): Promise<BankProviderConfiguration[]> => {
+    const { data } = await api.get('/bank-provider-configurations')
+    return data
+  },
+  savePluggy: async (payload: { client_id: string; client_secret: string; enabled?: boolean }): Promise<BankProviderConfiguration> => {
+    const { data } = await api.put('/bank-provider-configurations/pluggy', payload)
+    return data
   },
 }
 
@@ -987,7 +1001,7 @@ export const recurring = {
     const { data } = await api.get('/recurring-transactions')
     return data
   },
-  create: async (rt: Partial<RecurringTransaction>): Promise<RecurringTransaction> => {
+  create: async (rt: Partial<RecurringTransaction> & { skip_first?: boolean }): Promise<RecurringTransaction> => {
     const { data } = await api.post('/recurring-transactions', rt)
     return data
   },

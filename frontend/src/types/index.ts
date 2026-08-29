@@ -139,6 +139,15 @@ export interface BankConnection {
   institutions: ConnectionInstitution[]
 }
 
+export interface BankProviderConfiguration {
+  id: string
+  provider: string
+  enabled: boolean
+  has_credentials: boolean
+  created_at: string
+  updated_at: string
+}
+
 export interface ConnectionSettings {
   payee_source?: 'auto' | 'merchant' | 'payment_data' | 'description' | 'none'
   import_pending?: boolean
@@ -570,16 +579,21 @@ export interface RecurringTransaction {
   account_id: string | null
   category_id: string | null
   description: string
+  notes: string | null
   amount: number
   currency: string
   type: 'debit' | 'credit'
-  frequency: 'monthly' | 'quarterly' | 'weekly' | 'yearly'
+  frequency: 'monthly' | 'quarterly' | 'weekly' | 'yearly' | 'custom'
+  interval_count: number | null
+  interval_unit: 'days' | 'weeks' | 'months' | 'years' | null
   weekend_adjustment: 'none' | 'previous_friday' | 'next_monday'
   day_of_month: number | null
   start_date: string
   end_date: string | null
   is_active: boolean
   auto_generate: boolean
+  notification_offsets: number[]
+  notify_overdue_daily: boolean
   next_occurrence: string
   amount_primary: number | null
   fx_rate_used: number | null
