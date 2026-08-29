@@ -1,8 +1,14 @@
 # Production deployment
 
-The active workflow in `workflows/ci.yml` runs backend and frontend checks on
-pull requests and pushes. A push to `main` triggers Dokploy only after both
-checks pass.
+The active workflows deliberately avoid running the same checks twice:
+
+- `workflows/ci.yml` checks pull requests targeting `main` (and supports a
+  complete manual run).
+- `workflows/deploy.yml` triggers Dokploy when the already-checked pull request
+  is merged into `main` (and also supports a manual deploy).
+
+Protect `main` in GitHub and require the CI checks before merging. The deploy
+workflow assumes that changes only reach `main` through that protected path.
 
 ## GitHub configuration
 
