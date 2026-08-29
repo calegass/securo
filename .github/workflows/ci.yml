@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -33,9 +31,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Keep the required Backend Tests check fast for PRs that only touch
-          # frontend/docs files. Pushes to main still run the full backend suite.
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          # A manual run checks the complete backend. Pull requests can skip
+          # the expensive suite when they only touch frontend/docs files.
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "run_backend=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -142,47 +140,3 @@ jobs:
 
       - name: Run tests
         run: npm test
-
-  deploy-production:
-    name: Deploy to Dokploy
-    needs: [backend-tests, migration-chain, frontend-checks]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    environment: production
-    env:
-      DOKPLOY_URL: https://dokploy.calegari.dev.br
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
-
-    steps:
-      - name: Validate deployment secrets
-        run: |
-          set -euo pipefail
-          if [ -z "$DOKPLOY_API_KEY" ] || [ -z "$DOKPLOY_COMPOSE_ID" ]; then
-            echo "::error::Configure DOKPLOY_API_KEY and DOKPLOY_COMPOSE_ID in the production environment secrets."
-            exit 1
-          fi
-
-      - name: Trigger Dokploy deployment
-        run: |
-          set -euo pipefail
-
-          jq -n \
-            --arg composeId "$DOKPLOY_COMPOSE_ID" \
-            --arg title "Deploy ${GITHUB_SHA::7}" \
-            --arg description "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA" \
-            '{composeId: $composeId, title: $title, description: $description}' \
-            > "$RUNNER_TEMP/dokploy-payload.json"
-
-          curl \
-            --fail-with-body \
-            --show-error \
-            --silent \
-            --request POST \
-            "$DOKPLOY_URL/api/compose.deploy" \
-            --header "Content-Type: application/json" \
-            --header "x-api-key: $DOKPLOY_API_KEY" \
-            --data "@$RUNNER_TEMP/dokploy-payload.json"
-
-          echo "Deployment accepted by Dokploy." >> "$GITHUB_STEP_SUMMARY"
