@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.worker import celery_app
 from app.core.config import get_settings
 from app.models.bank_connection import BankConnection
-from app.providers.base import ProviderNotConfiguredError
+from app.models.user import User
+from app.providers.base import ProviderNotConfiguredError, ProviderUserActionRequired, SessionExpiredError
 from app.services import connection_service
+from app.services.notification_service import send_email
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ async def _sync_all() -> int:
         async with session_maker() as session:
             result = await session.execute(
                 select(
-                    BankConnection.id, BankConnection.user_id, BankConnection.last_sync_at
+                    BankConnection.id,
+                    BankConnection.user_id,
+                    BankConnection.last_sync_at,
                 ).where(
                     BankConnection.status.in_(["active", "error"]),
                     (BankConnection.last_sync_at < cutoff)
@@ -68,15 +72,48 @@ async def _sync_all() -> int:
 async def _sync_one(session_maker, connection_id: uuid.UUID, user_id: uuid.UUID) -> None:
     """Sync a single connection. Error status is set by sync_connection itself."""
     async with session_maker() as session:
-        workspace_id = await session.scalar(
-            select(BankConnection.workspace_id).where(BankConnection.id == connection_id)
-        )
-        if workspace_id is None:
+        connection = await session.get(BankConnection, connection_id)
+        if connection is None:
             logger.warning("Connection %s has no workspace; skipping sync", connection_id)
             return
-        await connection_service.sync_connection(
-            session, connection_id, workspace_id, user_id
-        )
+        was_error = connection.status == "error"
+        try:
+            await connection_service.sync_connection(
+                session, connection_id, connection.workspace_id, user_id
+            )
+        except (SessionExpiredError, ProviderUserActionRequired):
+            if not was_error:
+                await _notify_connection_needs_renewal(session, connection, user_id)
+            raise
+        except Exception:
+            if not was_error:
+                await _notify_connection_sync_failed(session, connection, user_id)
+            raise
+
+
+async def _notify_connection_sync_failed(
+    session: AsyncSession, connection: BankConnection, user_id: uuid.UUID
+) -> None:
+    user = await session.get(User, user_id)
+    await send_email(
+        user.email if user else None,
+        f"{get_settings().app_name}: falha na sincronização bancária",
+        "Não foi possível sincronizar a conexão "
+        f"{connection.institution_name or connection.provider}. Abra Contas para tentar novamente.",
+    )
+
+
+async def _notify_connection_needs_renewal(
+    session: AsyncSession, connection: BankConnection, user_id: uuid.UUID
+) -> None:
+    user = await session.get(User, user_id)
+    await send_email(
+        user.email if user else None,
+        f"{get_settings().app_name}: reconecte sua instituição bancária",
+        "A conexão "
+        f"{connection.institution_name or connection.provider} precisa ser renovada. "
+        "Abra Contas e use Reconectar.",
+    )
 
 
 @celery_app.task(name="app.tasks.sync_tasks.sync_all_connections")
@@ -101,16 +138,6 @@ def sync_single_connection(connection_id: str, user_id: str) -> dict:
 async def _sync_one_celery(connection_id: str, user_id: str) -> None:
     engine, session_maker = _make_session_maker()
     try:
-        async with session_maker() as session:
-            conn_uuid = uuid.UUID(connection_id)
-            workspace_id = await session.scalar(
-                select(BankConnection.workspace_id).where(BankConnection.id == conn_uuid)
-            )
-            if workspace_id is None:
-                logger.warning("Connection %s has no workspace; skipping sync", connection_id)
-                return
-            await connection_service.sync_connection(
-                session, conn_uuid, workspace_id, uuid.UUID(user_id)
-            )
+        await _sync_one(session_maker, uuid.UUID(connection_id), uuid.UUID(user_id))
     finally:
         await engine.dispose()

@@ -23,9 +23,10 @@ interface ConnectorSelectDialogProps {
   open: boolean
   onClose: () => void
   onSelect: (provider: Provider) => void
+  onConfigurePluggy?: () => void
 }
 
-export function ConnectorSelectDialog({ open, onClose, onSelect }: ConnectorSelectDialogProps) {
+export function ConnectorSelectDialog({ open, onClose, onSelect, onConfigurePluggy }: ConnectorSelectDialogProps) {
   const { t } = useTranslation()
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
@@ -62,15 +63,22 @@ export function ConnectorSelectDialog({ open, onClose, onSelect }: ConnectorSele
             providers.map((p) => (
               <button
                 key={p.name}
-                disabled={!p.configured}
+                disabled={!p.configured && p.name !== 'pluggy'}
                 onClick={() => {
+                  if (!p.configured && p.name === 'pluggy') {
+                    onConfigurePluggy?.()
+                    onClose()
+                    return
+                  }
                   onSelect(p)
                   onClose()
                 }}
                 className={`w-full flex items-start gap-3 rounded-lg border p-4 text-left transition-colors ${
                   p.configured
                     ? 'border-border hover:border-primary hover:bg-muted/50 cursor-pointer'
-                    : 'border-border/50 opacity-60 cursor-not-allowed'
+                    : p.name === 'pluggy'
+                      ? 'border-border hover:border-primary hover:bg-muted/50 cursor-pointer'
+                      : 'border-border/50 opacity-60 cursor-not-allowed'
                 }`}
               >
                 <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center shrink-0 mt-0.5">
@@ -79,7 +87,12 @@ export function ConnectorSelectDialog({ open, onClose, onSelect }: ConnectorSele
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-foreground">{p.display_name}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">{t(`accounts.providers.${p.name}.description`, p.description)}</p>
-                  {!p.configured && (
+                  {!p.configured && p.name === 'pluggy' && (
+                    <p className="text-xs text-primary mt-1.5">
+                      {t('accounts.configurePluggy', 'Configurar credenciais Pluggy')}
+                    </p>
+                  )}
+                  {!p.configured && p.name !== 'pluggy' && (
                     <p className="text-xs text-amber-600 mt-1.5">
                       {t('accounts.connectorNotConfigured')}
                     </p>

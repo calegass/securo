@@ -28,28 +28,39 @@ from app.schemas.bank_connection import (
     ReconnectTokenResponse,
 )
 from app.services import connection_service
+from app.services import bank_provider_configuration_service as provider_configuration_service
 from app.services.transfer_detection_service import detect_transfer_pairs, unlink_transfer_pair
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 
 
 @router.get("/providers")
-async def get_available_providers():
+async def get_available_providers(
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
     """List all known open finance providers with configuration status."""
-    return {"providers": all_known_providers()}
+    configurations = await provider_configuration_service.list_configurations(session, ctx.user_id)
+    configured = {c.provider for c in configurations if c.enabled}
+    return {"providers": all_known_providers(configured)}
 
 
 @router.post("/connect-token", response_model=ConnectTokenResponse)
 async def create_connect_token(
     data: ConnectTokenRequest,
     ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """Create a connect token for widget-based bank connection flows."""
     try:
-        token_data = await connection_service.create_connect_token(data.provider, ctx.user_id)
+        token_data = await connection_service.create_connect_token(
+            data.provider, ctx.user_id, session=session
+        )
         return ConnectTokenResponse(**token_data)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -129,6 +140,8 @@ async def oauth_callback(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -151,6 +164,8 @@ async def get_reauth_url(
         return ReauthUrlResponse(url=url)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except NotImplementedError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -216,6 +231,11 @@ async def get_reconnect_token(
     connection = await connection_service.get_connection(session, connection_id, ctx.workspace.id)
     if not connection:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+    if connection.user_id != ctx.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the connection owner can renew its authorization",
+        )
 
     item_id = connection.credentials.get("item_id") if connection.credentials else None
     if not item_id:
@@ -226,7 +246,11 @@ async def get_reconnect_token(
 
     try:
         token_data = await connection_service.create_connect_token(
-            connection.provider, ctx.user_id, item_id=item_id
+            connection.provider,
+            ctx.user_id,
+            item_id=item_id,
+            session=session,
+            configuration_id=connection.provider_configuration_id,
         )
         return ReconnectTokenResponse(**token_data)
     except Exception as e:

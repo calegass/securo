@@ -5,6 +5,8 @@ from app.models.category import Category
 from app.models.category_group import CategoryGroup
 from app.models.bank_connection import BankConnection
 from app.models.institution import Institution
+from app.models.bank_provider_configuration import BankProviderConfiguration
+from app.models.notification_delivery import NotificationDelivery
 from app.models.account import Account
 from app.models.transaction import Transaction
 from app.models.rule import Rule
@@ -40,6 +42,8 @@ __all__ = [
     "CategoryGroup",
     "BankConnection",
     "Institution",
+    "BankProviderConfiguration",
+    "NotificationDelivery",
     "Account",
     "Transaction",
     "Rule",

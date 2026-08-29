@@ -55,9 +55,18 @@ export type TransactionSavePayload = TransactionEditPayload & {
   apply_to?: TransactionApplyScope
 }
 
+export type RecurringCreationOptions = {
+  frequency: RecurringTransaction['frequency']
+  end_date?: string
+  interval_count?: number
+  interval_unit?: NonNullable<RecurringTransaction['interval_unit']>
+  notification_offsets: number[]
+  notify_overdue_daily: boolean
+}
+
 type PendingInstallmentEdit = {
   data: TransactionEditPayload
-  recurringData?: { frequency: string; end_date?: string }
+  recurringData?: RecurringCreationOptions
   installmentData?: InstallmentSeriesInput
   pendingFiles?: File[]
   action?: SaveAction
@@ -101,7 +110,7 @@ export function TransactionDialog({
   categoryGroups: CategoryGroup[]
   accounts: { id: string; name: string; display_name?: string | null; type?: string }[]
   recurringMatch?: RecurringTransaction
-  onSave: (data: TransactionSavePayload, recurringData?: { frequency: string; end_date?: string }, installmentData?: InstallmentSeriesInput, pendingFiles?: File[], action?: SaveAction) => void
+  onSave: (data: TransactionSavePayload, recurringData?: RecurringCreationOptions, installmentData?: InstallmentSeriesInput, pendingFiles?: File[], action?: SaveAction) => void
   onDelete?: () => void
   onUnlinkTransfer?: (pairId: string) => void
   onIgnoreChanged?: () => void
@@ -160,7 +169,7 @@ export function TransactionDialog({
 
   const handleSave = (
     data: TransactionEditPayload,
-    recurringData?: { frequency: string; end_date?: string },
+    recurringData?: RecurringCreationOptions,
     installmentData?: InstallmentSeriesInput,
     pendingFiles?: File[],
     action?: SaveAction,
@@ -393,7 +402,7 @@ function TransactionForm({
   categoryGroups: CategoryGroup[]
   accounts: { id: string; name: string; display_name?: string | null; type?: string }[]
   recurringMatch?: RecurringTransaction
-  onSave: (data: TransactionEditPayload, recurringData?: { frequency: string; end_date?: string }, installmentData?: InstallmentSeriesInput, pendingFiles?: File[], action?: SaveAction) => void
+  onSave: (data: TransactionEditPayload, recurringData?: RecurringCreationOptions, installmentData?: InstallmentSeriesInput, pendingFiles?: File[], action?: SaveAction) => void
   onDelete?: () => void
   onUnlinkTransfer?: (pairId: string) => void
   onIgnoreChanged?: () => void
@@ -449,13 +458,19 @@ function TransactionForm({
   const [isRecurring, setIsRecurring] = useState(false)
   const [frequency, setFrequency] = useState<RecurringTransaction['frequency']>('monthly')
   const [endDate, setEndDate] = useState('')
+  const [recurringIntervalCount, setRecurringIntervalCount] = useState('10')
+  const [recurringIntervalUnit, setRecurringIntervalUnit] = useState<NonNullable<RecurringTransaction['interval_unit']>>('days')
+  const [notifyBefore, setNotifyBefore] = useState(false)
+  const [notificationDaysBefore, setNotificationDaysBefore] = useState('3')
+  const [notifyOnDueDate, setNotifyOnDueDate] = useState(false)
+  const [notifyOverdueDaily, setNotifyOverdueDaily] = useState(false)
   // Manual installment series: when checked, the save handler
   // builds an InstallmentSeriesInput payload that repeats the transaction
   // as N parcels. Only count and frequency are asked for: each parcel uses
   // the transaction's own amount and status.
   const [isInstallment, setIsInstallment] = useState(false)
   const [installmentCount, setInstallmentCount] = useState('2')
-  const [installmentFrequency, setInstallmentFrequency] = useState<RecurringTransaction['frequency']>('monthly')
+  const [installmentFrequency, setInstallmentFrequency] = useState<Exclude<RecurringTransaction['frequency'], 'custom'>>('monthly')
   // Optional split-with-group payload. `null` = leave splits as-is on
   // update, or no splits on create. The dedicated section component
   // owns its own UI state and surfaces a normalized payload here.
@@ -757,7 +772,17 @@ function TransactionForm({
               ...splitsPayload,
             } as TransactionEditPayload
         const recurringData = isCreating && isRecurring
-          ? { frequency, end_date: endDate || undefined }
+          ? {
+              frequency,
+              end_date: endDate || undefined,
+              interval_count: frequency === 'custom' ? Math.max(1, parseInt(recurringIntervalCount) || 1) : undefined,
+              interval_unit: frequency === 'custom' ? recurringIntervalUnit : undefined,
+              notification_offsets: [
+                ...(notifyBefore ? [-Math.max(1, parseInt(notificationDaysBefore) || 3)] : []),
+                ...(notifyOnDueDate ? [0] : []),
+              ],
+              notify_overdue_daily: notifyOverdueDaily,
+            }
           : undefined
         const installmentData = isCreating && isInstallment && !isSynced
           ? buildInstallmentSeriesInput({
@@ -1192,28 +1217,102 @@ function TransactionForm({
             </label>
           </div>
           {isRecurring && (
-            <div className="grid grid-cols-2 gap-4 pt-1">
-              <div className="space-y-2">
-                <Label>{t('recurring.frequency')}</Label>
-                <select
-                  className="w-full border border-border rounded-md px-3 py-2 text-sm bg-card focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
-                  value={frequency}
-                  onChange={(e) => setFrequency(e.target.value as RecurringTransaction['frequency'])}
-                >
-                  <option value="monthly">{t('recurring.monthly')}</option>
-                  <option value="quarterly">{t('recurring.quarterly')}</option>
-                  <option value="weekly">{t('recurring.weekly')}</option>
-                  <option value="yearly">{t('recurring.yearly')}</option>
-                </select>
+            <div className="space-y-4 pt-1">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>{t('recurring.frequency')}</Label>
+                  <select
+                    className="w-full border border-border rounded-md px-3 py-2 text-sm bg-card focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
+                    value={frequency}
+                    onChange={(e) => setFrequency(e.target.value as RecurringTransaction['frequency'])}
+                  >
+                    <option value="monthly">{t('recurring.monthly')}</option>
+                    <option value="quarterly">{t('recurring.quarterly')}</option>
+                    <option value="weekly">{t('recurring.weekly')}</option>
+                    <option value="yearly">{t('recurring.yearly')}</option>
+                    <option value="custom">{t('recurring.custom', 'Personalizada')}</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label>{t('recurring.endDate')}</Label>
+                  <DatePickerInput
+                    value={endDate}
+                    onChange={setEndDate}
+                    placeholder={t('recurring.endDate')}
+                    className="w-full justify-start"
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label>{t('recurring.endDate')}</Label>
-                <DatePickerInput
-                  value={endDate}
-                  onChange={setEndDate}
-                  placeholder={t('recurring.endDate')}
-                  className="w-full justify-start"
-                />
+              {frequency === 'custom' && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{t('recurring.interval', 'Repetir a cada')}</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="3650"
+                      value={recurringIntervalCount}
+                      onChange={(e) => setRecurringIntervalCount(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t('recurring.intervalUnit', 'Unidade')}</Label>
+                    <select
+                      className="w-full border border-border rounded-md px-3 py-2 text-sm bg-card focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
+                      value={recurringIntervalUnit}
+                      onChange={(e) => setRecurringIntervalUnit(e.target.value as NonNullable<RecurringTransaction['interval_unit']>)}
+                    >
+                      <option value="days">{t('recurring.days', 'dias')}</option>
+                      <option value="weeks">{t('recurring.weeks', 'semanas')}</option>
+                      <option value="months">{t('recurring.months', 'meses')}</option>
+                      <option value="years">{t('recurring.years', 'anos')}</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              <div className="rounded-lg border border-border p-3 space-y-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">{t('recurring.emailAlerts', 'Alertas por e-mail')}</p>
+                  <p className="text-xs text-muted-foreground">{t('recurring.emailAlertsHelp', 'Requer SMTP configurado no servidor.')}</p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input
+                    type="checkbox"
+                    checked={notifyBefore}
+                    onChange={(e) => setNotifyBefore(e.target.checked)}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  {t('recurring.beforeDue', 'Avisar antes do vencimento')}
+                  {notifyBefore && (
+                    <Input
+                      className="h-8 w-16"
+                      type="number"
+                      min="1"
+                      max="365"
+                      value={notificationDaysBefore}
+                      onChange={(e) => setNotificationDaysBefore(e.target.value)}
+                    />
+                  )}
+                  {notifyBefore && <span className="text-muted-foreground">{t('recurring.days', 'dias')}</span>}
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input
+                    type="checkbox"
+                    checked={notifyOnDueDate}
+                    onChange={(e) => setNotifyOnDueDate(e.target.checked)}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  {t('recurring.onDueDate', 'Avisar no dia do vencimento')}
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input
+                    type="checkbox"
+                    checked={notifyOverdueDaily}
+                    onChange={(e) => setNotifyOverdueDaily(e.target.checked)}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  {t('recurring.overdueDaily', 'Avisar diariamente após vencer, até o pagamento')}
+                </label>
               </div>
             </div>
           )}
@@ -1224,7 +1323,7 @@ function TransactionForm({
                 <select
                   className="w-full border border-border rounded-md px-3 py-2 text-sm bg-card focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
                   value={installmentFrequency}
-                  onChange={(e) => setInstallmentFrequency(e.target.value as RecurringTransaction['frequency'])}
+                  onChange={(e) => setInstallmentFrequency(e.target.value as Exclude<RecurringTransaction['frequency'], 'custom'>)}
                 >
                   <option value="monthly">{t('recurring.monthly')}</option>
                   <option value="quarterly">{t('recurring.quarterly')}</option>

@@ -49,12 +49,24 @@ def register_provider(name: str, cls: type[BankProvider]) -> None:
     _PROVIDERS[name] = cls
 
 
-def get_provider(name: str) -> BankProvider:
-    """Get an instance of a registered bank provider by name."""
+def get_provider(name: str, configuration: dict[str, str] | None = None) -> BankProvider:
+    """Get an instance of a registered provider.
+
+    ``configuration`` is deliberately server-side only. Today Pluggy is the
+    only provider that accepts user-owned credentials; the registry keeps the
+    constructor detail here so the connection service stays provider-agnostic.
+    """
     provider_class = _PROVIDERS.get(name)
     if not provider_class:
         available = ", ".join(_PROVIDERS.keys()) or "(none)"
         raise ValueError(f"Unknown provider: {name}. Available: {available}")
+    if name == "pluggy" and configuration is not None:
+        from app.providers.pluggy import PluggyProvider
+
+        return PluggyProvider(
+            client_id=configuration["client_id"],
+            client_secret=configuration["client_secret"],
+        )
     return provider_class()
 
 
@@ -66,10 +78,23 @@ def list_providers() -> list[dict[str, str]]:
     ]
 
 
-def all_known_providers() -> list[dict]:
-    """Return all known providers with a configured flag."""
+def all_known_providers(user_configured: set[str] | None = None) -> list[dict]:
+    """Return known providers with configuration resolved for one user."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    user_configured = user_configured or set()
+
+    def is_configured(provider_name: str) -> bool:
+        if provider_name == "pluggy":
+            return bool(
+                provider_name in user_configured
+                or (settings.pluggy_client_id and settings.pluggy_client_secret)
+            )
+        return provider_name in _PROVIDERS
+
     return [
-        {**p, "configured": p["name"] in _PROVIDERS}
+        {**p, "configured": is_configured(str(p["name"]))}
         for p in KNOWN_PROVIDERS
     ]
 
@@ -79,9 +104,11 @@ def _auto_register_providers() -> None:
     from app.core.config import get_settings
     settings = get_settings()
 
-    if settings.pluggy_client_id and settings.pluggy_client_secret:
-        from app.providers.pluggy import PluggyProvider
-        register_provider("pluggy", PluggyProvider)
+    # Pluggy can now be configured by an individual user in the database, so
+    # register its implementation even when the legacy global env pair is
+    # absent. The provider itself gives a clear error if neither source exists.
+    from app.providers.pluggy import PluggyProvider
+    register_provider("pluggy", PluggyProvider)
 
     eb_has_key = bool(
         settings.enable_banking_private_key or settings.enable_banking_private_key_file

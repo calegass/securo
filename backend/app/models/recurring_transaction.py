@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -35,10 +35,15 @@ class RecurringTransaction(Base):
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True)
     category_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
     description: Mapped[str] = mapped_column(String(500))
+    notes: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(precision=15, scale=2))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     type: Mapped[str] = mapped_column(String(10))  # debit, credit
-    frequency: Mapped[str] = mapped_column(String(20))  # weekly, monthly, quarterly, yearly
+    frequency: Mapped[str] = mapped_column(String(20))  # weekly, monthly, quarterly, yearly, custom
+    # Custom cadence is intentionally generic (e.g. every 15 days or every
+    # 2 months). Built-in frequencies keep these NULL for compatibility.
+    interval_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    interval_unit: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     weekend_adjustment: Mapped[str] = mapped_column(
         String(20), default="none", server_default="none"
     )
@@ -52,6 +57,14 @@ class RecurringTransaction(Base):
     # matched to it (e.g. from bank sync). Either way, incoming real
     # transactions are linked back to the bill to avoid duplicates.
     auto_generate: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Negative values are days before the due date; zero is the due date.
+    # An empty list disables emails for this obligation.
+    notification_offsets: Mapped[list[int]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    notify_overdue_daily: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     next_occurrence: Mapped[date] = mapped_column(Date)
     amount_primary: Mapped[Optional[Decimal]] = mapped_column(Numeric(precision=15, scale=2), nullable=True)
     fx_rate_used: Mapped[Optional[Decimal]] = mapped_column(Numeric(precision=20, scale=10), nullable=True)

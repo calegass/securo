@@ -16,6 +16,7 @@ from app.models.asset import Asset
 from app.models.asset_group import AssetGroup
 from app.models.asset_value import AssetValue
 from app.models.bank_connection import BankConnection
+from app.models.bank_provider_configuration import BankProviderConfiguration
 from app.models.account import Account
 from app.models.category import Category
 from app.models.institution import Institution
@@ -28,6 +29,7 @@ from app.models.user import User
 from app.providers import get_provider
 from app.providers.base import (
     AccountData,
+    BankProvider,
     HoldingData,
     ProviderNotConfiguredError,
     ProviderRateLimited,
@@ -51,10 +53,44 @@ from app.services.rule_service import apply_rules_to_transaction, preview_rules_
 from app.services.transfer_detection_service import detect_transfer_pairs
 from app.services.fx_rate_service import stamp_primary_amount
 from app.services.payee_service import get_or_create_payee
+from app.services import bank_provider_configuration_service as provider_configuration_service
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+async def _provider_for_new_connection(
+    session: AsyncSession, provider_name: str, user_id: uuid.UUID
+) -> tuple[BankProvider, uuid.UUID | None]:
+    """Build a provider for a new connection and remember its credential owner."""
+    if provider_name != "pluggy":
+        return get_provider(provider_name), None
+    configuration = await provider_configuration_service.get_configuration(
+        session, user_id, provider_name
+    )
+    if configuration is None:
+        # Legacy installations keep using the globally configured Pluggy app.
+        return get_provider(provider_name), None
+    credentials = provider_configuration_service.decrypt_configuration(configuration)
+    return get_provider(provider_name, configuration=credentials), configuration.id
+
+
+async def _provider_for_existing_connection(
+    session: AsyncSession, connection: BankConnection
+) -> BankProvider:
+    """Resolve exactly the credentials selected when a connection was created."""
+    if connection.provider_configuration_id is None:
+        return get_provider(connection.provider)
+    configuration = await session.get(
+        BankProviderConfiguration, connection.provider_configuration_id
+    )
+    if configuration is None:
+        raise ValueError("Provider configuration for this connection no longer exists")
+    if configuration.provider != connection.provider:
+        raise ValueError("Provider configuration does not match this connection")
+    credentials = provider_configuration_service.decrypt_configuration(configuration)
+    return get_provider(connection.provider, configuration=credentials)
 
 
 def _clean_logo_url(value: object) -> Optional[str]:
@@ -263,7 +299,7 @@ async def _sync_holdings(
     # Storage errors below are intentionally not caught — they indicate
     # a schema/invariant bug we want to surface, not a hiccup to swallow.
     try:
-        provider = get_provider(connection.provider)
+        provider = await _provider_for_existing_connection(session, connection)
         holdings = await provider.get_holdings(credentials)
     except Exception:  # noqa: BLE001
         logger.exception(
@@ -843,7 +879,9 @@ async def get_reauth_url(
     connection = await get_connection(session, connection_id, workspace_id)
     if not connection:
         raise ValueError("Connection not found")
-    provider = get_provider(connection.provider)
+    if connection.user_id != user_id:
+        raise PermissionError("Only the connection owner can renew its authorization")
+    provider = await _provider_for_existing_connection(session, connection)
     state = await oauth_state.store_state(
         {
             "user_id": str(user_id),
@@ -885,9 +923,31 @@ async def list_provider_institutions(
 
 
 async def create_connect_token(
-    provider_name: str, user_id: uuid.UUID, item_id: str | None = None
+    provider_name: str,
+    user_id: uuid.UUID,
+    item_id: str | None = None,
+    *,
+    session: AsyncSession | None = None,
+    configuration_id: uuid.UUID | None = None,
 ) -> dict:
-    provider = get_provider(provider_name)
+    if session is not None and configuration_id is not None:
+        configuration = await session.get(BankProviderConfiguration, configuration_id)
+        if (
+            configuration is None
+            or configuration.provider != provider_name
+            or configuration.user_id != user_id
+        ):
+            raise ValueError("Provider configuration for this connection was not found")
+        provider = get_provider(
+            provider_name,
+            configuration=provider_configuration_service.decrypt_configuration(configuration),
+        )
+    elif session is not None:
+        provider, _ = await _provider_for_new_connection(session, provider_name, user_id)
+    else:
+        # Compatibility for internal callers that intentionally use the
+        # legacy/global provider path.
+        provider = get_provider(provider_name)
     token_data = await provider.create_connect_token(str(user_id), item_id=item_id)
     return {"access_token": token_data.access_token}
 
@@ -946,6 +1006,8 @@ async def handle_oauth_callback(
         existing_reconnect = await session.get(BankConnection, uuid.UUID(str(reconnect_id)))
         if not existing_reconnect or existing_reconnect.workspace_id != workspace_id:
             raise ValueError("Reconnect target connection not found")
+        if existing_reconnect.user_id != user_id:
+            raise PermissionError("Only the connection owner can renew its authorization")
         # Token reconnects do not carry OAuth state, so the request body may be
         # the only source of provider_name. Never allow a pasted token for one
         # provider to overwrite another provider's stored credentials.
@@ -956,7 +1018,14 @@ async def handle_oauth_callback(
     if not provider_name:
         raise ValueError("OAuth callback missing provider")
 
-    provider = get_provider(provider_name)
+    provider_configuration_id: uuid.UUID | None = None
+    if existing_reconnect:
+        provider = await _provider_for_existing_connection(session, existing_reconnect)
+        provider_configuration_id = existing_reconnect.provider_configuration_id
+    else:
+        provider, provider_configuration_id = await _provider_for_new_connection(
+            session, provider_name, user_id
+        )
     connection_data = await provider.handle_oauth_callback(code)
 
     if existing_reconnect:
@@ -984,6 +1053,7 @@ async def handle_oauth_callback(
     connection = BankConnection(
         workspace_id=workspace_id,
         user_id=user_id,
+        provider_configuration_id=provider_configuration_id,
         provider=provider_name,
         external_id=connection_data.external_id,
         institution_name=connection_data.institution_name,
@@ -1588,7 +1658,7 @@ async def sync_connection(
     # provider is a server misconfiguration, and the catch-all below would
     # wrongly stamp the (healthy) connection with status="error".
     try:
-        provider = get_provider(connection.provider)
+        provider = await _provider_for_existing_connection(session, connection)
     except ValueError as exc:
         raise ProviderNotConfiguredError(
             f"Provider '{connection.provider}' is not configured in this process. "

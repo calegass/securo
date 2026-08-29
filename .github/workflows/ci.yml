@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-tests:
@@ -93,26 +101,6 @@ jobs:
           name: coverage-report
           path: backend/coverage.xml
 
-      - name: Extract coverage percentage
-        if: github.ref == 'refs/heads/main' && steps.backend-changes.outputs.run_backend == 'true'
-        id: coverage
-        run: |
-          COVERAGE=$(python -c "import xml.etree.ElementTree as ET; print(round(float(ET.parse('coverage.xml').getroot().attrib['line-rate']) * 100))")
-          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
-
-      - name: Update coverage badge
-        if: github.repository == 'securo-finance/securo' && github.ref == 'refs/heads/main' && steps.backend-changes.outputs.run_backend == 'true'
-        uses: schneegans/dynamic-badges-action@v1.9.0
-        with:
-          auth: ${{ secrets.GIST_TOKEN }}
-          gistID: ae627b744aaa2ba89d850ea541c311be
-          filename: coverage.json
-          label: coverage
-          message: ${{ steps.coverage.outputs.percentage }}%
-          valColorRange: ${{ steps.coverage.outputs.percentage }}
-          minColorRange: 50
-          maxColorRange: 90
-
   migration-chain:
     name: Migration Chain
     runs-on: ubuntu-latest
@@ -155,50 +143,46 @@ jobs:
       - name: Run tests
         run: npm test
 
-  helm-checks:
-    name: Helm Checks
+  deploy-production:
+    name: Deploy to Dokploy
+    needs: [backend-tests, migration-chain, frontend-checks]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
+    timeout-minutes: 5
+    environment: production
+    env:
+      DOKPLOY_URL: https://dokploy.calegari.dev.br
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
 
-      - name: Detect helm-relevant changes
-        id: helm-changes
+    steps:
+      - name: Validate deployment secrets
+        run: |
+          set -euo pipefail
+          if [ -z "$DOKPLOY_API_KEY" ] || [ -z "$DOKPLOY_COMPOSE_ID" ]; then
+            echo "::error::Configure DOKPLOY_API_KEY and DOKPLOY_COMPOSE_ID in the production environment secrets."
+            exit 1
+          fi
+
+      - name: Trigger Dokploy deployment
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "run_helm=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          jq -n \
+            --arg composeId "$DOKPLOY_COMPOSE_ID" \
+            --arg title "Deploy ${GITHUB_SHA::7}" \
+            --arg description "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA" \
+            '{composeId: $composeId, title: $title, description: $description}' \
+            > "$RUNNER_TEMP/dokploy-payload.json"
 
-          changed_files="$(git diff --name-only HEAD^1 HEAD)"
+          curl \
+            --fail-with-body \
+            --show-error \
+            --silent \
+            --request POST \
+            "$DOKPLOY_URL/api/compose.deploy" \
+            --header "Content-Type: application/json" \
+            --header "x-api-key: $DOKPLOY_API_KEY" \
+            --data "@$RUNNER_TEMP/dokploy-payload.json"
 
-          if echo "$changed_files" | grep -Eq '^(charts/securo/.*|\.github/workflows/ci\.yml)$'; then
-            echo "run_helm=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run_helm=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip helm checks
-        if: steps.helm-changes.outputs.run_helm != 'true'
-        run: echo "No helm-relevant changes; skipping helm lint."
-
-      - name: Set up Helm
-        if: steps.helm-changes.outputs.run_helm == 'true'
-        uses: azure/setup-helm@v5
-        with:
-          version: v4.2.4
-
-      - name: Lint Helm Chart
-        if: steps.helm-changes.outputs.run_helm == 'true'
-        run: helm lint charts/securo
-
-      - name: Validate Helm Chart with Kubeconform
-        if: steps.helm-changes.outputs.run_helm == 'true'
-        run: |
-          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar -xz
-          sudo mv kubeconform /usr/local/bin/
-
-          helm template securo-test charts/securo | kubeconform -summary -strict
+          echo "Deployment accepted by Dokploy." >> "$GITHUB_STEP_SUMMARY"

@@ -85,6 +85,38 @@ async def test_create_with_skip_first(session: AsyncSession, test_user, test_wor
 
 
 @pytest.mark.asyncio
+async def test_create_custom_obligation_with_notes(
+    session: AsyncSession, test_user, test_workspace, test_account_for_recurring
+):
+    rec = await create_recurring_transaction(
+        session,
+        test_workspace.id,
+        test_user.id,
+        RecurringTransactionCreate(
+            description="IPTU parcelado",
+            notes="Parcela anual da prefeitura",
+            amount=Decimal("250"),
+            type="debit",
+            frequency="custom",
+            interval_count=2,
+            interval_unit="months",
+            start_date=date(2025, 1, 10),
+            account_id=test_account_for_recurring.id,
+        ),
+    )
+
+    assert rec.notes == "Parcela anual da prefeitura"
+    assert rec.interval_count == 2
+    assert rec.interval_unit == "months"
+    assert _advance_date(
+        rec.next_occurrence,
+        rec.frequency,
+        interval_count=rec.interval_count,
+        interval_unit=rec.interval_unit,
+    ) == date(2025, 3, 10)
+
+
+@pytest.mark.asyncio
 async def test_get_recurring_transactions(
     session: AsyncSession, test_user, test_workspace, test_account_for_recurring
 ):
@@ -220,6 +252,15 @@ def test_advance_date_monthly_overflow():
 def test_advance_date_weekly():
     assert _advance_date(date(2025, 1, 1), "weekly") == date(2025, 1, 8)
     assert _advance_date(date(2025, 12, 29), "weekly") == date(2026, 1, 5)
+
+
+def test_advance_date_custom_cadences():
+    assert _advance_date(
+        date(2025, 1, 31), "custom", intended_day=31, interval_count=2, interval_unit="months"
+    ) == date(2025, 3, 31)
+    assert _advance_date(
+        date(2025, 1, 1), "custom", interval_count=15, interval_unit="days"
+    ) == date(2025, 1, 16)
 
 
 def test_advance_date_yearly():

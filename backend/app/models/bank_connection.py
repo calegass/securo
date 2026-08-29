@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from app.models.user import User
     from app.models.account import Account
     from app.models.institution import Institution
+    from app.models.bank_provider_configuration import BankProviderConfiguration
 
 
 class BankConnection(Base):
@@ -21,6 +22,12 @@ class BankConnection(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    provider_configuration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bank_provider_configurations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     provider: Mapped[str] = mapped_column(String(50))  # "pluggy", "belvo", etc.
     external_id: Mapped[str] = mapped_column(String(255))  # Provider's item ID
@@ -37,6 +44,9 @@ class BankConnection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     user: Mapped["User"] = relationship(back_populates="bank_connections")
+    provider_configuration: Mapped[Optional["BankProviderConfiguration"]] = relationship(
+        back_populates="connections"
+    )
     accounts: Mapped[list["Account"]] = relationship(back_populates="connection", cascade="all, delete-orphan")
     # Institutions reached through this link (issue #345). Eager (selectin) so
     # the connections API can summarize them without async lazy loads.

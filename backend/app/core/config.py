@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 CREDENTIALS_DIRECTORY: list[Path] = [
     Path(p) for p in getenv("CREDENTIALS_DIRECTORY", "/run/secrets").split(":") if p
 ]
+DEFAULT_SECRET_KEY = "change-me-in-production"
+MIN_SECRET_KEY_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -21,7 +23,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/securo"
 
     # Auth
-    secret_key: SecretStr = SecretStr("change-me-in-production")
+    secret_key: SecretStr = SecretStr(DEFAULT_SECRET_KEY)
     local_auth_enabled: bool = True
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
@@ -107,6 +109,16 @@ class Settings(BaseSettings):
     # Celery
     redis_url: str = "redis://localhost:6379/0"
 
+    # Notifications — SMTP is optional. When omitted, notification dispatch is
+    # a safe no-op so self-hosted installations do not need an email service.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from: str = ""
+    smtp_tls: bool = True  # STARTTLS
+    smtp_timeout_seconds: int = 20
+
     # Logo size for market-priced asset icons. The logo URL is built from
     # the company website we get from the market-price provider; no API
     # key or third-party account is required. Defaults to 128×128 which
@@ -127,6 +139,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_auth_settings(self) -> "Settings":
+        secret_key = self.secret_key.get_secret_value()
+        if not self.debug and (
+            secret_key == DEFAULT_SECRET_KEY or len(secret_key) < MIN_SECRET_KEY_LENGTH
+        ):
+            raise ValueError(
+                "SECRET_KEY must be a random value of at least 32 characters when DEBUG=false. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
         if not self.local_auth_enabled and not self.oidc_login_available:
             missing = []
             if not self.oidc_enabled:
